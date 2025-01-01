@@ -49,234 +49,166 @@ Before using `gdrive-core`, ensure you have:
    - **For Service Account:**
         - No `token.json` file is necessary as credentials are managed by the `credentials.json` file.
 
-## Usage
+## Core Features
 
-### 1. Authenticate and Initialize the Client
-
-Initialize the `GDriveCore` client for interacting with Google Drive. You can choose between `oauth2` and `service_account` authentication types.
+### Authentication
 
 ```python
 from gdrive_core import GDriveCore
 
-# Initialize the client with OAuth2
-client = GDriveCore(auth_type='oauth2', credentials_file='credentials.json', token_file='token.json')
+# OAuth2 Authentication (default)
+client = GDriveCore(
+    auth_type='oauth2',
+    credentials_file='credentials.json',
+    token_file='token.json',
+    max_retries=3  # Optional: set maximum retry attempts
+)
 
-# Initialize the client with Service Account
-# client = GDriveCore(auth_type='service_account', credentials_file='credentials.json')
+# Service Account Authentication
+client = GDriveCore(
+    auth_type='service_account',
+    credentials_file='credentials.json'
+)
 ```
 
-### 2. Upload a File with Custom Metadata and Progress Tracking
-
-Upload a file to Google Drive, optionally adding custom properties and using a callback function to track progress.
+### File Operations
 
 ```python
-def upload_progress(progress):
-    print(f"Upload progress: {progress:.2f}%")
-
 # Upload a file with progress tracking and custom properties
-file_id = client.upload('example.txt', properties={'is-penguin': 'true', 'category': 'animal'}, progress_callback=upload_progress)
-print(f"Uploaded file ID: {file_id}")
+def track_progress(progress):
+    print(f"Progress: {progress:.2f}%")
+
+file_id = client.upload(
+    file_path='example.txt',
+    parent_id='folder_id',  # Optional
+    properties={'category': 'documents'},  # Optional
+    progress_callback=track_progress  # Optional
+)
+
+# Stream-based upload
+with open('example.txt', 'rb') as file_obj:
+    file_id = client.upload_stream(
+        file_obj,
+        filename='example.txt',
+        mime_type='text/plain'  # Optional
+    )
+
+# Download files
+client.download(
+    file_id='file_id',
+    local_path='downloaded.txt',
+    progress_callback=track_progress  # Optional
+)
+
+# Stream-based download
+file_stream = client.download_stream('file_id')
+content = file_stream.read()
 ```
 
-### 3. List Files
-
-List files in the root directory or filter files using queries.
-
-```python
-# List all files
-files = client.list_files()
-print("Files in Drive:")
-for f in files:
-    print(f"- {f['name']} (ID: {f['id']})")
-```
-
-### 4. Download a File with Progress Tracking
-
-Download a file from Google Drive using its file ID. You can track the progress using a callback function.
-
-```python
-def download_progress(progress):
-    print(f"Download progress: {progress:.2f}%")
-
-# Download a file
-download_path = 'downloaded_example.txt'
-client.download(file_id, download_path, progress_callback=download_progress)
-print(f"File downloaded to: {download_path}")
-```
-
-### 5. Create a Folder
-
-Create a new folder in Google Drive to organize your files.
+### Folder Management
 
 ```python
 # Create a folder
-folder_id = client.create_folder('NewFolder')
-print(f"Folder created with ID: {folder_id}")
+folder_id = client.create_folder(
+    folder_name='My Folder',
+    parent_id='parent_folder_id'  # Optional
+)
+
+# Get or create folder (creates if doesn't exist)
+folder_id = client.get_or_create_folder(
+    folder_name='My Folder',
+    parent_id='parent_folder_id'  # Optional
+)
+
+# Move files between folders
+client.move(
+    file_id='file_id',
+    new_parent_id='new_folder_id',
+    old_parent_id='old_folder_id'  # Optional
+)
 ```
 
-### 6. Move a File to a Folder
-
-Move an existing file into a specific folder.
+### Search and List Files
 
 ```python
-# Move the file to the new folder
-client.move(file_id, new_parent_id=folder_id)
-print("File moved successfully!")
+# List files with custom fields
+files = client.list_files(
+    query="name contains 'report'",  # Optional
+    fields="files(id, name, mimeType, modifiedTime)"  # Optional
+)
+
+# Advanced search with multiple criteria
+results = client.search({
+    'name_contains': 'report',
+    'mime_type': 'application/pdf',
+    'trashed': 'false'
+})
 ```
 
-### 7. Update File Metadata
-
-Update a file's name or description.
+### File Sharing and Metadata
 
 ```python
+# Share a file
+share_result = client.share(
+    file_id='file_id',
+    email='user@example.com',
+    role='reader'  # Options: 'reader', 'writer', 'commenter'
+)
+
 # Update file metadata
-client.update_metadata(file_id, metadata={'name': 'renamed_example.txt', 'description': 'Updated metadata'})
-print("File metadata updated!")
-```
+client.update_metadata(
+    file_id='file_id',
+    metadata={'name': 'new_name.txt', 'description': 'Updated file'}
+)
 
-### 8. Search for Files
-
-Search for files matching specific criteria like name, MIME type, and trashed status.
-
-```python
-# Search for files
-results = client.search(query_params={'name_contains': 'example', 'mime_type': 'text/plain', 'trashed': 'false'})
-print("Search results:")
-for file in results:
-    print(f"- {file['name']} (ID: {file['id']})")
-```
-
-### 9. Batch Delete Files
-
-Delete multiple files at once by providing their file IDs.
-
-```python
-# Batch delete files
-deletion_results = client.batch_delete([file_id])
-print(f"Files deleted successfully: {deletion_results}")
-```
-
-### 10. Share a File
-
-Share a file with another user with a specific role (e.g., reader, writer).
-
-```python
-# Share file with reader access
-share_result = client.share(file_id, email='user@example.com', role='reader')
-print(f"File shared successfully: {share_result}")
-```
-
-### 11. Get File Revisions
-
-Get a list of previous versions (revisions) of a file.
-
-```python
-# Get file revisions
-revisions = client.get_file_revisions(file_id)
-print(f"File revisions: {revisions}")
-```
-
-### 12. Copy a File
-
-Create a copy of an existing file.
-
-```python
-# Create a copy of the file
-copied_file_id = client.copy_file(file_id, new_name='example_copy.txt')
-print(f"Copied file ID: {copied_file_id}")
-```
-
-### 13. Get Storage Quota
-
-Retrieve the storage usage of your Google Drive.
-
-```python
-# Get storage quota
-quota = client.get_storage_quota()
-print(f"Storage quota: {quota}")
-```
-
-### 14. Watch File for Changes
-
-Set up a webhook to receive notifications when the file is modified.
-
-```python
-# Watch file for changes
-watch_response = client.watch_file(file_id, webhook_url='https://your-webhook-url.com')
-print(f"Watch setup result: {watch_response}")
-```
-
-### 15. Export a File
-
-Export a Google Workspace file to a specific format.
-
-```python
-# Export file to PDF
-exported_file = client.export_file(file_id, mime_type='application/pdf')
-with open('exported.pdf', 'wb') as f:
-    f.write(exported_file.read())
-print(f"File exported to 'exported.pdf'")
-```
-
-### Basic Usage with Context Manager
-
-The simplest way to use gdrive-core is with the context manager:
-
-```python
-from gdrive_core import GDriveCore
-
-with GDriveCore() as drive:
-    # Upload a file to a nested folder structure (creates folders if they don't exist)
-    folder_id = drive.get_or_create_folder('Projects/2024/Reports')
-    file_id = drive.upload_file('monthly_report.pdf', folder_id)
-```
-
-### Path-based Operations
-
-Work with Google Drive using familiar path strings:
-
-```python
-with GDriveCore() as drive:
-    # Get file ID from path
-    file_id = drive.path_to_id('Projects/2024/Reports/monthly_report.pdf')
-    
-    # Create nested folders automatically
-    folder_id = drive.get_or_create_folder('Projects/2024/Reports')
+# Get file metadata
+metadata = client.get_file_metadata(
+    file_id='file_id',
+    fields="*"  # Optional: specify fields to return
+)
 ```
 
 ### Batch Operations
 
-Upload or delete multiple files efficiently:
-
 ```python
-with GDriveCore() as drive:
-    # Upload multiple files in parallel
-    files_to_upload = ['file1.txt', 'file2.pdf', 'file3.docx']
-    results = drive.batch_upload(files_to_upload, folder_id)
-    
-    # Delete multiple files
-    files_to_delete = ['id1', 'id2', 'id3']
-    deletion_results = drive.batch_delete(files_to_delete)
+# Delete multiple files
+results = client.batch_delete(['file_id1', 'file_id2', 'file_id3'])
+# Returns: {'file_id1': True, 'file_id2': True, 'file_id3': False}
 ```
 
-### Simplified Search
-
-Search for files using intuitive parameters:
+### Advanced Features
 
 ```python
-with GDriveCore() as drive:
-    # Search for documents in a specific folder
-    docs = drive.search({
-        'type': 'document',
-        'parent': folder_id,
-        'name': 'Monthly Report'
-    })
-    
-    # Search for non-trashed folders
-    folders = drive.search({
-        'type': 'folder',
-        'trashed': False
-    })
+# Get file revision history
+revisions = client.get_file_revisions('file_id')
+
+# Copy files
+new_file_id = client.copy_file(
+    file_id='file_id',
+    new_name='copy_name.txt'  # Optional
+)
+
+# Get storage quota
+quota = client.get_storage_quota()
+
+# Watch for file changes
+watch_result = client.watch_file(
+    file_id='file_id',
+    webhook_url='https://your-webhook.com'
+)
+
+# Export Google Workspace files
+pdf_content = client.export_file(
+    file_id='document_id',
+    mime_type='application/pdf'
+)
+```
+
+### Path-based Operations
+
+```python
+# Convert path to file ID
+file_id = client.path_to_id('Folder1/Subfolder/file.txt')
 ```
 
 ## Full Example
