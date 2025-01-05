@@ -486,32 +486,6 @@ class GDriveCore:
             self.logger.error(f"Stop watching failed for channel {channel_id}: {str(e)}")
             raise
 
-    def watch_file(self, file_id: str, webhook_url: str, expiration: Optional[int] = None) -> Dict[str, Any]:
-        """Set up push notifications for file changes.
-        
-        Args:
-            file_id: The ID of the file to watch
-            webhook_url: The URL that will receive notifications
-            expiration: Optional timestamp for when the notification channel should expire
-            
-        Returns:
-            Watch response containing channel ID and resource ID
-        """
-        try:
-            body = {
-                'id': f'watch-{file_id}',
-                'type': 'web_hook',
-                'address': webhook_url
-            }
-            if expiration:
-                body['expiration'] = expiration
-
-            request = self.service.files().watch(fileId=file_id, body=body)
-            return self._execute_with_retry(request)
-        except Exception as e:
-            self.logger.error(f"Watch setup failed for file {file_id}: {str(e)}")
-            raise
-
     # Add context manager support
     def __enter__(self):
         return self
