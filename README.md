@@ -4,27 +4,13 @@ A minimal and functional Google Drive API wrapper for Python. Easily perform Goo
 
 ## Features
 
-- **Flexible Authentication**: Supports OAuth2 and Service Account authentication.
-- **File Management**: Upload (with progress tracking), download (with progress tracking), list, and delete files effortlessly. Supports streamed uploads/downloads.
-- **Folder Management**: Create folders and organize files.
-- **Custom Metadata**: Add and manage arbitrary custom properties to files, and update metadata.
-- **Batch Operations**: Delete multiple files at once using parallel processing.
-- **Advanced Search**: Search for files using multiple criteria such as name, MIME type, and trashed status.
-- **File Sharing**: Share files with specific permissions.
-- **File Revisions**: Access a file's revision history.
-- **Copy Files**: Create copies of existing files.
-- **Storage Quota**: Retrieve information about your Google Drive storage usage.
-- **Push Notifications**: Set up webhooks to watch for file changes.
-- **File Export**: Export Google Workspace files in various formats.
-- **OOP Interface**: Interact with Google Drive through a clean, class-based API.
-- **Logging**: Integrated logging for better monitoring and debugging.
-- **Retry Mechanism**: Automatic retries for API calls to handle transient errors.
-- **Path-based Operations**: Work with Google Drive using familiar path strings (e.g., 'folder1/folder2/file.txt')
-- **Context Manager Support**: Clean resource management using Python's `with` statement
-- **Simplified File Operations**: High-level methods for common tasks
-- **Automatic Folder Creation**: Create nested folder structures with a single call
-- **Batch Processing**: Upload, download, or delete multiple files in parallel
-
+- **Authentication**: OAuth2 and Service Account support
+- **File Operations**: Upload/download (with progress tracking), list, delete, copy, and metadata management
+- **Folder Management**: Create and manage folders
+- **Search & Share**: File search and permission management
+- **Batch Operations**: Parallel deletion for multiple files
+- **Path Operations**: Basic path-to-ID conversion
+- **Modern Python**: Context managers, type hints, and clean OOP interface
 
 ## Installation
 
@@ -85,12 +71,16 @@ file_id = client.upload(
     progress_callback=track_progress  # Optional
 )
 
-# Stream-based upload
+# Simplified upload wrapper
+file_id = client.upload_file('example.txt', folder_id='optional_folder_id')
+
+# Stream-based upload (note additional kwargs support)
 with open('example.txt', 'rb') as file_obj:
     file_id = client.upload_stream(
         file_obj,
         filename='example.txt',
-        mime_type='text/plain'  # Optional
+        mime_type='text/plain',  # Optional
+        **additional_metadata  # Supports additional metadata kwargs
     )
 
 # Download files
@@ -134,15 +124,16 @@ client.move(
 # List files with custom fields
 files = client.list_files(
     query="name contains 'report'",  # Optional
-    fields="files(id, name, mimeType, modifiedTime)"  # Optional
+    fields="files(id, name, mimeType, modifiedTime)"  # Default fields shown
 )
 
-# Advanced search with multiple criteria
+# Advanced search with supported parameters
 results = client.search({
     'name_contains': 'report',
     'mime_type': 'application/pdf',
     'trashed': 'false'
 })
+# Note: Only name_contains, mime_type, and trashed parameters are currently supported
 ```
 
 ### File Sharing and Metadata
@@ -194,13 +185,38 @@ quota = client.get_storage_quota()
 # Watch for file changes
 watch_result = client.watch_file(
     file_id='file_id',
-    webhook_url='https://your-webhook.com'
+    webhook_url='https://your-webhook.com',
+    expiration=1735689600000  # Optional: Unix timestamp in milliseconds
+)
+
+# Stop watching file changes
+client.stop_watching(
+    channel_id=watch_result['id'],
+    resource_id=watch_result['resourceId']
 )
 
 # Export Google Workspace files
 pdf_content = client.export_file(
     file_id='document_id',
     mime_type='application/pdf'
+)
+
+# Empty trash
+client.empty_trash()
+
+# Generate file IDs for future use
+file_ids = client.generate_file_ids(count=5)  # Default: 10, Max: 1000
+
+# Label management
+labels = client.list_labels('file_id')
+
+# Modify labels
+client.modify_labels(
+    file_id='file_id',
+    labels={
+        'labelKey': 'labelValue',
+        'priority': 'high'
+    }
 )
 ```
 
@@ -211,6 +227,25 @@ pdf_content = client.export_file(
 file_id = client.path_to_id('Folder1/Subfolder/file.txt')
 ```
 
+### Error Handling and Retries
+
+The library implements automatic retry logic with exponential backoff for all API operations:
+
+```python
+# Configure retry attempts during initialization
+client = GDriveCore(
+    auth_type='oauth2',
+    credentials_file='credentials.json',
+    max_retries=3  # Default: 3
+)
+
+# All operations automatically use retry logic
+try:
+    file_id = client.upload_file('large_file.zip')
+except Exception as e:
+    print(f"Operation failed after {client._max_retries} attempts: {e}")
+```
+
 ## Full Example
 
 Here's a complete example showcasing the intuitive features:
@@ -219,29 +254,41 @@ Here's a complete example showcasing the intuitive features:
 from gdrive_core import GDriveCore
 
 with GDriveCore() as drive:
-    # Create a nested folder structure
-    folder_id = drive.get_or_create_folder('Projects/2024/Reports')
+    # Create a folder
+    folder_id = drive.create_folder('Reports')
     
-    # Upload multiple files to the folder
-    files_to_upload = ['report1.pdf', 'report2.pdf', 'data.xlsx']
-    upload_results = drive.batch_upload(files_to_upload, folder_id)
+    # Upload a file to the folder
+    file_id = drive.upload_file('report1.pdf', folder_id)
     
-    # Search for all PDF files in the folder
+    # Search for PDF files
     pdfs = drive.search({
-        'type': 'pdf',
-        'parent': folder_id
+        'mime_type': 'application/pdf',
+        'name_contains': 'report'
     })
     
-    # Download all PDF files
+    # Download found files
     for pdf in pdfs:
         drive.download(pdf['id'], f"downloaded_{pdf['name']}")
     
     # Share the folder with someone
     drive.share(folder_id, 'colleague@company.com', role='writer')
     
-    # Get the folder's metadata
-    metadata = drive.get_file_metadata(folder_id)
-    print(f"Folder size: {metadata.get('size', 'N/A')} bytes")
+    # Watch for changes
+    watch_result = drive.watch_file(
+        file_id=folder_id,
+        webhook_url='https://your-webhook.com'
+    )
+    
+    # Get storage quota
+    quota = drive.get_storage_quota()
+    print(f"Storage used: {quota.get('usage')} of {quota.get('limit')} bytes")
+    
+    # Clean up
+    drive.empty_trash()  # Empty trash
+    drive.stop_watching(  # Stop watching for changes
+        channel_id=watch_result['id'],
+        resource_id=watch_result['resourceId']
+    )
 ```
 
 ## Common Operations Quick Reference
@@ -250,25 +297,30 @@ Here are some common operations and their simplified syntax:
 
 ```python
 with GDriveCore() as drive:
-    # Create nested folders
-    folder_id = drive.get_or_create_folder('Path/To/Folder')
+    # Create a folder
+    folder_id = drive.create_folder('MyFolder')
     
     # Upload a file
     file_id = drive.upload_file('document.pdf', folder_id)
     
     # Get file ID from path
-    file_id = drive.path_to_id('Path/To/Folder/document.pdf')
+    file_id = drive.path_to_id('MyFolder/document.pdf')
     
     # Search for files
     results = drive.search({
-        'name': 'document.pdf',
-        'type': 'pdf',
-        'trashed': False
+        'name_contains': 'document',
+        'mime_type': 'application/pdf',
+        'trashed': 'false'
     })
     
-    # Batch operations
-    drive.batch_upload(['file1.txt', 'file2.txt'], folder_id)
+    # Batch deletion
     drive.batch_delete(['file_id1', 'file_id2'])
+    
+    # Generate file IDs for future use
+    new_ids = drive.generate_file_ids(count=5)
+    
+    # Manage labels
+    drive.modify_labels('file_id', {'priority': 'high'})
 ```
 
 ## Troubleshooting
@@ -277,7 +329,9 @@ with GDriveCore() as drive:
 - **Token Issues (OAuth2)**: If you face authentication problems, delete the `token.json` file and re-authenticate.
 - **Service Account Issues**: Ensure the service account has the necessary permissions to access your Google Drive.
 - **Custom Metadata**: Ensure custom property keys and values conform to Google Drive's property limitations.
-- **Rate Limits**: Google Drive API has rate limits. If you encounter issues, consider implementing retry mechanisms or exponential backoff.
+- **Rate Limits**: The library implements automatic retry logic with exponential backoff. You can configure max_retries during initialization.
+- **Webhook Issues**: Ensure your webhook URL is publicly accessible and can handle POST requests.
+- **Label Operations**: Label management requires appropriate permissions and valid label formats.
 
 ## License
 

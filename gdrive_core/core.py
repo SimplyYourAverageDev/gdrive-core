@@ -1,11 +1,13 @@
 import os
+import random
+from time import sleep
 from google.oauth2.credentials import Credentials
 from google.oauth2 import service_account
 from google_auth_oauthlib.flow import InstalledAppFlow
 from google.auth.transport.requests import Request
 from googleapiclient.discovery import build
-from googleapiclient.http import MediaFileUpload, MediaIoBaseDownload
-from typing import Optional, List, Dict, Any, BinaryIO
+from googleapiclient.http import MediaFileUpload, MediaIoBaseDownload, MediaIoBaseUpload
+from typing import Optional, List, Dict, Any, BinaryIO, Union
 import io
 import mimetypes
 import logging
@@ -47,6 +49,28 @@ class GDriveCore:
         formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
         handler.setFormatter(formatter)
         self.logger.addHandler(handler)
+
+    def _execute_with_retry(self, request: Any) -> Any:
+        """Execute a request with exponential backoff retry logic.
+        
+        Args:
+            request: The Google API request object to execute
+            
+        Returns:
+            The response from the API
+            
+        Raises:
+            Exception: If all retry attempts fail
+        """
+        for attempt in range(self._max_retries):
+            try:
+                return request.execute()
+            except Exception as e:
+                if attempt == self._max_retries - 1:
+                    raise
+                sleep_time = (2 ** attempt) + random.random()
+                self.logger.warning(f"Attempt {attempt + 1} failed, retrying in {sleep_time:.1f}s")
+                sleep(sleep_time)
 
     def _authenticate(self, auth_type: str, credentials_file: str, 
                      token_file: str) -> Any:
@@ -124,15 +148,15 @@ class GDriveCore:
             self.logger.error(f"Upload failed for {file_path}: {str(e)}")
             raise
 
-    def upload_stream(self, file_obj: BinaryIO, filename: str, 
+    def upload_stream(self, file_obj: BinaryIO, filename: str,
                      mime_type: Optional[str] = None, **kwargs) -> str:
         """Upload a file from a stream."""
         if not mime_type:
             mime_type = mimetypes.guess_type(filename)[0] or 'application/octet-stream'
         
         metadata = {'name': filename, **kwargs}
-        media = MediaFileUpload(file_obj, mimetype=mime_type, 
-                              resumable=True, chunksize=self._chunk_size)
+        media = MediaIoBaseUpload(file_obj, mimetype=mime_type,
+                                resumable=True, chunksize=self._chunk_size)
         
         request = self.service.files().create(
             body=metadata,
@@ -340,15 +364,28 @@ class GDriveCore:
             self.logger.error(f"Get storage quota failed: {str(e)}")
             raise
 
-    def watch_file(self, file_id: str, webhook_url: str) -> Dict:
-        """Set up push notifications for file changes."""
+    def watch_file(self, file_id: str, webhook_url: str, expiration: Optional[int] = None) -> Dict[str, Any]:
+        """Set up push notifications for file changes.
+        
+        Args:
+            file_id: The ID of the file to watch
+            webhook_url: The URL that will receive notifications
+            expiration: Optional timestamp for when the notification channel should expire
+            
+        Returns:
+            Watch response containing channel ID and resource ID
+        """
         try:
             body = {
                 'id': f'watch-{file_id}',
                 'type': 'web_hook',
                 'address': webhook_url
             }
-            return self.service.files().watch(fileId=file_id, body=body).execute()
+            if expiration:
+                body['expiration'] = expiration
+
+            request = self.service.files().watch(fileId=file_id, body=body)
+            return self._execute_with_retry(request)
         except Exception as e:
             self.logger.error(f"Watch setup failed for file {file_id}: {str(e)}")
             raise
@@ -366,6 +403,113 @@ class GDriveCore:
             return fh
         except Exception as e:
             self.logger.error(f"Export failed for file {file_id}: {str(e)}")
+            raise
+
+    def empty_trash(self) -> None:
+        """Permanently deletes all of the user's trashed files."""
+        try:
+            request = self.service.files().emptyTrash()
+            self._execute_with_retry(request)
+        except Exception as e:
+            self.logger.error(f"Empty trash failed: {str(e)}")
+            raise
+
+    def generate_file_ids(self, count: int = 10) -> List[str]:
+        """Generate a set of file IDs for future use in create/copy operations.
+        
+        Args:
+            count: Number of IDs to generate (default: 10, max: 1000)
+            
+        Returns:
+            List of generated file IDs
+        """
+        try:
+            request = self.service.files().generateIds(count=min(count, 1000))
+            response = self._execute_with_retry(request)
+            return response.get('ids', [])
+        except Exception as e:
+            self.logger.error(f"Generate IDs failed: {str(e)}")
+            raise
+
+    def list_labels(self, file_id: str) -> List[Dict]:
+        """Lists the labels on a file.
+        
+        Args:
+            file_id: The ID of the file to list labels for
+            
+        Returns:
+            List of label objects
+        """
+        try:
+            request = self.service.files().listLabels(fileId=file_id)
+            response = self._execute_with_retry(request)
+            return response.get('labels', [])
+        except Exception as e:
+            self.logger.error(f"List labels failed for file {file_id}: {str(e)}")
+            raise
+
+    def modify_labels(self, file_id: str, labels: Dict[str, Any]) -> Dict[str, Any]:
+        """Modifies the set of labels on a file.
+        
+        Args:
+            file_id: The ID of the file to modify labels for
+            labels: Dictionary containing label modifications
+            
+        Returns:
+            Updated label information
+        """
+        try:
+            request = self.service.files().modifyLabels(
+                fileId=file_id,
+                body=labels
+            )
+            return self._execute_with_retry(request)
+        except Exception as e:
+            self.logger.error(f"Modify labels failed for file {file_id}: {str(e)}")
+            raise
+
+    def stop_watching(self, channel_id: str, resource_id: str) -> None:
+        """Stop receiving push notifications for a file.
+        
+        Args:
+            channel_id: The ID of the notification channel to stop
+            resource_id: The resource ID received when starting the watch
+        """
+        try:
+            body = {
+                'id': channel_id,
+                'resourceId': resource_id
+            }
+            request = self.service.channels().stop(body=body)
+            self._execute_with_retry(request)
+        except Exception as e:
+            self.logger.error(f"Stop watching failed for channel {channel_id}: {str(e)}")
+            raise
+
+    def watch_file(self, file_id: str, webhook_url: str, expiration: Optional[int] = None) -> Dict[str, Any]:
+        """Set up push notifications for file changes.
+        
+        Args:
+            file_id: The ID of the file to watch
+            webhook_url: The URL that will receive notifications
+            expiration: Optional timestamp for when the notification channel should expire
+            
+        Returns:
+            Watch response containing channel ID and resource ID
+        """
+        try:
+            body = {
+                'id': f'watch-{file_id}',
+                'type': 'web_hook',
+                'address': webhook_url
+            }
+            if expiration:
+                body['expiration'] = expiration
+
+            request = self.service.files().watch(fileId=file_id, body=body)
+            return self._execute_with_retry(request)
+        except Exception as e:
+            self.logger.error(f"Watch setup failed for file {file_id}: {str(e)}")
             raise
 
     # Add context manager support
